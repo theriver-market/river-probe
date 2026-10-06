@@ -1,0 +1,27 @@
+name: probe
+on:
+  schedule: [{ cron: '17 * * * *' }]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Time pages from a US runner
+        run: |
+          set -u
+          ts=$(date -u +%Y-%m-%dT%H:%MZ); colo=$(curl -s -m 10 https://theriver.markets/cdn-cgi/trace | sed -n 's/^colo=//p')
+          row="{\"t\":\"$ts\",\"colo\":\"$colo\""
+          for p in / /markets /build /stocks/NVDA /llms.txt; do
+            r=$(curl -s -o /dev/null -m 30 -w '%{http_code} %{time_starttransfer} %{time_total}' "https://theriver.markets$p" || echo "000 30 30")
+            set -- $r; row="$row,\"$p\":{\"code\":$1,\"ttfb\":$2,\"total\":$3}"
+          done
+          r=$(curl -s -o /dev/null -m 30 -w '%{http_code} %{time_total}' -X POST https://theriver.markets/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"river-probe","version":"1"}}}' || echo "000 30")
+          set -- $r; row="$row,\"/mcp\":{\"code\":$1,\"total\":$2}}"
+          echo "$row" | tee -a data/us.jsonl
+      - name: Save
+        run: |
+          git config user.name river-probe; git config user.email ops@theriver.markets
+          git add data/us.jsonl && git commit -qm "probe $(date -u +%H:%MZ)" && git push -q || true
